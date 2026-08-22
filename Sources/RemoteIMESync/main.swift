@@ -105,6 +105,36 @@ func toggleTargets() -> (latin: TISInputSource, ime: TISInputSource)? {
     return (l, i)
 }
 
+func isCJKV(_ source: TISInputSource) -> Bool {
+    guard let lang = (tisProperty(source, kTISPropertyInputSourceLanguages)
+                        as? [String])?.first else { return false }
+    return lang == "ko" || lang == "ja" || lang == "vi" || lang.hasPrefix("zh")
+}
+
+// macOS bug: selecting a CJK input *mode* while an app holds key focus only
+// half-applies — the menu bar changes but the focused app keeps the old
+// source until key focus moves. Same workaround as macism: steal key focus
+// with a tiny window for ~150ms, then hand it back to the previous app.
+func focusBlip() {
+    let previous = NSWorkspace.shared.frontmostApplication
+    let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 3, height: 3),
+                     styleMask: [.titled], // plain windows can't become key
+                     backing: .buffered, defer: false)
+    w.isReleasedWhenClosed = false
+    w.level = .screenSaver
+    w.collectionBehavior = [.canJoinAllSpaces, .stationary]
+    if let screen = NSScreen.main {
+        w.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - 11,
+                                 y: screen.visibleFrame.minY + 8))
+    }
+    w.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        w.close()
+        previous?.activate(options: [])
+    }
+}
+
 func toggleLocalInputSource() {
     guard let targets = toggleTargets() else {
         NSLog("no latin+IME source pair found; nothing to toggle")
@@ -114,6 +144,10 @@ func toggleLocalInputSource() {
     let target = sourceID(current) == sourceID(targets.latin) ? targets.ime : targets.latin
     TISSelectInputSource(target)
     NSLog("local -> %@", sourceID(target))
+    if isCJKV(target) {
+        // Delay so the trigger's key-up still reaches the remote app first.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusBlip() }
+    }
 }
 
 // MARK: - Event tap
