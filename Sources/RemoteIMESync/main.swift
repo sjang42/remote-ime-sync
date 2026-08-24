@@ -129,7 +129,8 @@ func focusBlip() {
     }
     w.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+    // 150ms (macism default) proved too short for Jump Desktop's viewer; 500ms works.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
         w.close()
         previous?.activate(options: [])
     }
