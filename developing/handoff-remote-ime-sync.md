@@ -1,8 +1,8 @@
 ---
 title: remote-ime-sync 세션 핸드오프 — Jump Desktop 한영 동기화 (Karabiner 룰 + standalone 앱)
 type: handoff
-status: 앱 v0.1 커밋·push 완료 · 클라이언트(맥북) 실사용 검증 대기 · 배포 방향 미정
-last_updated: 2026-08-22
+status: 개인용 파이프라인 완성(⌃⌥⌘Space 아키텍처+JumpModifierFix, 실사용 검증됨) · 앱 v0.1은 새 아키텍처 미반영 · 배포 방향 미정
+last_updated: 2026-08-25
 claude_cwd: /Users/jex/work/remote-ime-sync (일부 작업은 vault 루트)
 branch: main
 sessions:
@@ -57,13 +57,36 @@ Jump Desktop(Fluid, Mac→Mac)에서 로컬·호스트 입력소스가 어긋나
      앱은 자체 focusBlip() 구현 (커밋 33ec23b). 앱 쪽 블립은 트리거 key-up 이
      원격에 먼저 도달하도록 100ms 지연 후 시작.
 
+## 1.5. 2026-08-25 추가분 (아키텍처 변경 — 앱에 미반영)
+
+1. 호스트 토글 키를 Cmd+Space → **⌃⌥⌘Space** 로 변경.
+   - 이유(전제 뒤집힘 ③): Cmd+Space 통과 방식은 뷰어의 이벤트 탭이 느린 네트워크로
+     일시 disable 될 때 클라 로컬 한영 단축키로 새서 "됐다 안 됐다" 증상 (실측).
+     클라 로컬에 안 묶인 조합은 일반 키 경로라 탭과 무관하게 항상 원격 도달.
+   - 호스트 심볼릭 핫키 60 = ⌃⌥⌘Space. **GUI 로만 변경 가능** — defaults write +
+     activateSettings 는 plist 만 바뀌고 라이브 미적용(macOS 26 실측 함정, osascript
+     주입으로 심볼릭 핫키 검증하는 것도 불발됨 — GUI+실경로로 검증할 것).
+   - 호스트 Karabiner 에 물리 Cmd+Space → ⌃⌥⌘Space 룰 추가 (데스크 사용 손버릇 유지).
+   - **앱(RemoteIMESync)은 아직 "같은 키 통과" 설계** — 이 분리(sendAs)를 반영해야
+     Karabiner 룰과 대등해짐. v0.2 필수 항목.
+2. **JumpModifierFix** 신규 (Sources/JumpModifierFix, 호스트 상주):
+   - Connect 7.x 버그: 호스트가 한글일 때 주입 Cmd+Shift+키에 가짜 ⌥ 추가 →
+     Raycast ⇧⌘V·Chrome ⇧⌘T 전멸. Jump 10.x 베타(10.15.16 Connect)에서 수정됐지만
+     베타 설치는 잭이 보류 → 세션 탭으로 "주입(srcPID≠0)+⌥⇧⌘+CJK" 에서 ⌥ 제거.
+   - 핵심 실측: 주입 CGEvent 는 Karabiner 는 못 보지만 세션 이벤트 탭에는 보인다.
+   - launchd `com.jex.jump-modifier-fix`, 바이너리 `~/.local/bin/JumpModifierFix`,
+     Input Monitoring 승인됨, 로그 `~/Library/Logs/jump-modifier-fix.log`.
+   - **Jump 10 안정판에서 Connect 가 고쳐지면 은퇴** (bootout + plist·바이너리 삭제).
+3. gist 에 `install.sh` 추가 — 원커맨드 클라 셋업 (Karabiner OS별 버전, macism,
+   설정; 인텔 /usr/local 지원). macism 블립 500ms(뷰어에 150ms 부족, 실측),
+   PATH 프리픽스 호출로 이식성 확보. 인텔 MBP 2015 는 느려서 잭이 포기.
+
 ## 2. 지금 상태
 
 - 이 repo: main, 클린, origin(sjang42/remote-ime-sync, private) 과 동기화됨.
-- vault: karabiner.client.json 최신( macism 버전) 커밋·push 됨, gist 도 동일 내용.
-- 잭 맥북: 세션 종료 시점 기준 macism 설치 + 새 karabiner.json 재설치를 안내한
-  상태 — 실제로 했는지, 영→한 문제가 해결됐는지 미확인. 다음 세션 첫 질문.
-- 앱은 맥북에서 아직 한 번도 실행 안 됨.
+- 개인용 파이프라인(클라 Karabiner ⌃⌥⌘Space + macism 500ms + 호스트 JumpModifierFix)
+  전 구간 실사용 검증 완료 (2026-08-25, 잭 확인).
+- 앱(RemoteIMESync)은 맥북에서 미실행 + 새 아키텍처(호스트 토글 키 분리) 미반영.
 
 ## 3. 남은 것 (왜 안 했나)
 
