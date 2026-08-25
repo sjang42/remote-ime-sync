@@ -5,6 +5,7 @@ let package = Package(
     name: "RemoteIMESync",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(name: "RemoteIMESync", path: "Sources/RemoteIMESync")
+        .executableTarget(name: "RemoteIMESync", path: "Sources/RemoteIMESync"),
+        .executableTarget(name: "JumpModifierFix", path: "Sources/JumpModifierFix")
     ]
 )
