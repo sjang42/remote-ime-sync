@@ -37,8 +37,9 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
     let flags = event.flags
 
     if observe {
-        if type == .keyDown {
-            NSLog("keyDown code=%d flags=0x%llx srcPID=%d cmd=%d shift=%d opt=%d ctrl=%d",
+        if type == .keyDown || type == .flagsChanged {
+            NSLog("%@ code=%d flags=0x%llx srcPID=%d cmd=%d shift=%d opt=%d ctrl=%d",
+                  type == .keyDown ? "keyDown" : "flagsCh",
                   keyCode, flags.rawValue, srcPID,
                   flags.contains(.maskCommand) ? 1 : 0,
                   flags.contains(.maskShift) ? 1 : 0,
@@ -59,8 +60,9 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
     return Unmanaged.passUnretained(event)
 }
 
-let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+var mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
     | (1 << CGEventType.keyUp.rawValue)
+if observe { mask |= (1 << CGEventType.flagsChanged.rawValue) }
 guard let port = CGEvent.tapCreate(
     tap: .cgSessionEventTap,
     place: .headInsertEventTap,

@@ -19,6 +19,9 @@ struct Config: Codable {
     var triggerKeyCode: Int?        // override; default: auto-detect from system shortcut
     var triggerModifiers: [String]? // "command" | "shift" | "control" | "option"
     var anyApp: Bool?               // test mode: ignore frontmost-app check
+    var hostKeyCode: Int?           // key to send onward when the host's toggle
+    var hostModifiers: [String]?    // shortcut differs from the trigger
+    var sendStepMs: Int?            // gap between the synthesized events
 
     static func load() -> Config {
         let url = FileManager.default.homeDirectoryForCurrentUser
@@ -155,14 +158,92 @@ func toggleLocalInputSource() {
 
 final class Tap {
     let trigger: (keyCode: Int, flags: CGEventFlags)
+    // What the host actually listens for. nil = same as the trigger, i.e. the
+    // event passes through untouched (original single-shortcut design).
+    let hostKey: (keyCode: Int, flags: CGEventFlags)?
+    // The remote side needs the modifier presses to land before the key, and a
+    // burst posted back-to-back loses roughly one in four (measured over Jump,
+    // 2026-09-01). Stagger them; tune if a slower link still drops one.
+    let sendStepMs: Int
     let bundlePrefixes: [String]
     let anyApp: Bool
     var machPort: CFMachPort?
 
-    init(trigger: (Int, CGEventFlags), bundlePrefixes: [String], anyApp: Bool) {
+    let sendQueue = DispatchQueue(label: "remote-ime-sync.send")
+
+    init(trigger: (Int, CGEventFlags), hostKey: (Int, CGEventFlags)?,
+         sendStepMs: Int, bundlePrefixes: [String], anyApp: Bool) {
         self.trigger = trigger
+        self.hostKey = hostKey
+        self.sendStepMs = sendStepMs
         self.bundlePrefixes = bundlePrefixes
         self.anyApp = anyApp
+    }
+
+    // Marks the events we post ourselves so the tap ignores them.
+    static let ownTag: Int64 = 0x1_4E45_5359   // "IMESY"
+    static let modifierKeyCodes: [(CGEventFlags, CGKeyCode)] = [
+        (.maskShift, 56), (.maskControl, 59), (.maskAlternate, 58), (.maskCommand, 55),
+    ]
+
+    func post(_ event: CGEvent?) {
+        guard let e = event else { return }
+        e.setIntegerValueField(.eventSourceUserData, value: Tap.ownTag)
+        e.post(tap: .cgSessionEventTap)
+    }
+
+    func postFlagsChanged(_ flags: CGEventFlags, _ key: CGKeyCode) {
+        guard let e = CGEvent(source: nil) else { return }
+        e.type = .flagsChanged
+        e.setIntegerValueField(.keyboardEventKeycode, value: Int64(key))
+        e.flags = flags
+        post(e)
+    }
+
+    // Send the host's own toggle shortcut in place of the trigger.
+    //
+    // Rewriting the key event's flags is not enough: the remote desktop app
+    // forwards modifier state as separate flagsChanged events, so a host that
+    // never saw Control and Option go down won't match the shortcut (verified
+    // 2026-09-01 — the rewritten keyDown arrived at the host intact and the
+    // hotkey still didn't fire). So we synthesize the whole sequence: press the
+    // modifiers the host key adds, tap the key, then put the modifiers back the
+    // way the user is actually holding them.
+    func sendHostKey(replacing event: CGEvent) {
+        guard let h = hostKey else { return }
+        let held = event.flags.intersection(Tap.relevant)
+        let add = h.flags.subtracting(held)
+        let drop = held.subtracting(h.flags)
+        let original = event.flags
+        let step = UInt32(sendStepMs * 1000)
+
+        // Off the tap callback: sleeping in it would stall every other key.
+        sendQueue.async {
+            var flags = original
+            func settle() { if step > 0 { usleep(step) } }
+
+            for (mask, key) in Tap.modifierKeyCodes where add.contains(mask) {
+                flags.insert(mask); self.postFlagsChanged(flags, key); settle()
+            }
+            for (mask, key) in Tap.modifierKeyCodes where drop.contains(mask) {
+                flags.remove(mask); self.postFlagsChanged(flags, key); settle()
+            }
+            for down in [true, false] {
+                guard let e = CGEvent(keyboardEventSource: nil,
+                                      virtualKey: CGKeyCode(h.keyCode), keyDown: down)
+                else { continue }
+                e.flags = flags
+                self.post(e); settle()
+            }
+            // Restore what the user is physically holding, or the host is left
+            // with phantom modifiers down.
+            for (mask, key) in Tap.modifierKeyCodes.reversed() where drop.contains(mask) {
+                flags.insert(mask); self.postFlagsChanged(flags, key); settle()
+            }
+            for (mask, key) in Tap.modifierKeyCodes.reversed() where add.contains(mask) {
+                flags.remove(mask); self.postFlagsChanged(flags, key); settle()
+            }
+        }
     }
 
     func remoteAppFrontmost() -> Bool {
@@ -181,20 +262,32 @@ final class Tap {
             if let port = machPort { CGEvent.tapEnable(tap: port, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        guard type == .keyDown,
+        guard type == .keyDown || type == .keyUp,
+              event.getIntegerValueField(.eventSourceUserData) != Tap.ownTag,
               event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
               event.getIntegerValueField(.keyboardEventKeycode) == trigger.keyCode,
               remoteAppFrontmost()
         else { return Unmanaged.passUnretained(event) }
 
         let flags = event.flags.intersection(Tap.relevant)
-        if flags == trigger.flags {
-            toggleLocalInputSource() // event passes through -> host toggles too
-        } else if !trigger.flags.contains(.maskShift),
-                  flags == trigger.flags.union(.maskShift) {
-            // Realign: strip shift so only the host sees the toggle shortcut.
-            event.flags = event.flags.subtracting(.maskShift)
+        let isRealign = !trigger.flags.contains(.maskShift)
+            && flags == trigger.flags.union(.maskShift)
+        guard flags == trigger.flags || isRealign else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        // We send our own key sequence, so swallow both halves of the original.
+        if hostKey != nil, type == .keyUp { return nil }
+
+        if isRealign {
             NSLog("realign: host-only toggle")
+            if hostKey == nil { event.flags = event.flags.subtracting(.maskShift) }
+        } else {
+            toggleLocalInputSource()
+        }
+        if hostKey != nil {
+            sendHostKey(replacing: event)
+            return nil
         }
         return Unmanaged.passUnretained(event)
     }
@@ -204,7 +297,8 @@ final class Tap {
             Unmanaged<Tap>.fromOpaque(userInfo!).takeUnretainedValue()
                 .handle(type: type, event: event)
         }
-        let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
+        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap, // ahead of the remote app's own tap
@@ -241,9 +335,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             """, stderr)
             exit(1)
         }
-        NSLog("trigger: keyCode=%d flags=%@", trigger.0, String(describing: trigger.1))
+        let hostKey: (Int, CGEventFlags)? = config.hostKeyCode.map {
+            ($0, modifierFlags(config.hostModifiers ?? []))
+        }
+        NSLog("trigger: keyCode=%d flags=%@ / host: %@",
+              trigger.0, String(describing: trigger.1),
+              hostKey.map { "keyCode=\($0.0) flags=\($0.1)" } ?? "same (pass-through)")
 
-        tap = Tap(trigger: trigger,
+        tap = Tap(trigger: trigger, hostKey: hostKey,
+                  sendStepMs: config.sendStepMs ?? 25,
                   bundlePrefixes: config.bundlePrefixes ?? ["com.p5sys.jump"],
                   anyApp: config.anyApp ?? false)
         if !tap.start() {
