@@ -57,8 +57,47 @@ Cmd+Space 로 누르고 ⌃⌥⌘Space 로 내보내는 것(=`sendAs`)이 v0.2 �
 6. **끝나고** — config 삭제(`rm -r ~/.config/remote-ime-sync`)하고 Karabiner 룰 복원
    (vault `dotfiles/karabiner/karabiner.client.json` 다시 복사).
 
-## 통과하면 다음
+## tart VM 테스트 리그 (2026-09-01 구축, 재사용 가능)
 
-`sendAs` 구현 — Cmd+Space 를 받아 ⌃⌥⌘Space 로 **바꿔서** 내보낸다. 미검증 리스크:
-세션 탭에서 keyDown 의 flags 만 고쳐도 Jump 가 모디파이어 상태를 flagsChanged 로
-따로 추적한다면 호스트에 ⌃⌥ 가 안 눌린 것으로 보일 수 있다. 실측으로 확인할 것.
+호스트 맥 안에 macOS VM 을 띄워 클라이언트 역할을 시킨다. Karabiner 를 건드리지
+않고 반복 테스트할 수 있어서 맥북보다 편하다.
+
+```sh
+tart clone ghcr.io/cirruslabs/macos-sequoia-base:latest ime-test   # 게스트는 호스트보다 낮은 버전
+tart set ime-test --memory 8192 --cpu 4
+tart run ime-test --dir=share:<바이너리 둘 폴더> &
+tart ip ime-test            # ssh admin@<ip>, 비번 admin (키 넣어두면 편함)
+```
+
+- 게스트에 한국어 입력 소스 추가: `defaults export com.apple.HIToolbox` → plist 의
+  `AppleEnabledInputSources` 에 `com.apple.inputmethod.Korean(.2SetKorean)` 항목 추가 →
+  `defaults import` → **재부팅**(로그아웃만으론 반영 안 될 때가 있음).
+- Jump 뷰어는 App Store 말고 직접 다운로드판: `https://jumpdesktop.com/downloads/jdmac`
+  (zip. 14일 트라이얼). 뷰어 bundle id = `com.p5sys.jump.mac.viewer.web`.
+- 앱은 GUI 세션에서 띄워야 한다: `sudo launchctl asuser $(id -u admin) sudo -u admin <바이너리>`
+- 게스트 화면 캡처는 게스트 안에서 `screencapture -x` 후 scp (호스트에서 VM 창을 찍는 것보다 깨끗).
+- 호스트 도착 여부 관측: `JumpModifierFix --observe` — keyDown 과 flagsChanged 를
+  srcPID 와 함께 찍는다. srcPID 가 JumpConnect 면 원격에서 온 것, 0이면 물리 키.
+
+## 2026-09-01 실측 결과
+
+**sendAs 동작 확인.** Cmd+Space → 게스트 로컬 전환 + 호스트 ⌃⌥⌘Space 전환 둘 다 됨.
+게스트의 시스템 Cmd+Space(Spotlight)는 **울리지 않았다** — 세션 탭이 심볼릭 핫키보다
+먼저 돈다는 것이 실측으로 확인됐고, 따라서 로컬 이중 토글도 없다. 재정렬
+(Cmd+Shift+Space)도 호스트만 전환되는 것 확인.
+
+**전제 뒤집힘 ④ — keyDown 의 flags 만 고치면 안 된다.** 처음엔 이벤트를 in-place 로
+고쳐 내보냈는데, 호스트 관측기에 `keyDown code=49 cmd=1 opt=1 ctrl=1` 로 **정확히
+도착했는데도** 핫키가 안 울렸다. 원격 데스크탑은 모디파이어 상태를 flagsChanged 로
+따로 전달하기 때문에, ⌃·⌥ 의 press/release 이벤트까지 합성해야 한다.
+
+**남은 것 — 호스트 쪽 ~20% 미발화.** 합성 시퀀스는 성공·실패 케이스가 관측기에서
+**완전히 동일**하다(⌘release → ⌃down → ⌘down → ⌥down → space down → 역순 해제).
+그런데도 호스트 핫키는 대략 4번 중 3번만 반응한다. sendStepMs 를 25→60ms 로 늘려도
+비율이 안 바뀌었으니 우리 쪽 타이밍 문제는 아니고, **전달 이후 호스트 단계**의 문제다.
+
+아직 못 가른 것: 이게 앱 고유의 문제인지, 아니면 Karabiner 경로에도 원래 있던
+호스트 특성인지. 가르는 방법 — 맥북에서 (a) 지금 Karabiner 룰로 Cmd+Space 를 10번
+눌러 미발화 비율을 세고, (b) 호스트 물리 키보드로 ⌃⌥⌘Space 를 10번 눌러 센다.
+Karabiner 경로에도 같은 비율이면 앱 문제가 아니라 잭이 겪던 "됐다 안 됐다" 의
+남은 절반이다.
