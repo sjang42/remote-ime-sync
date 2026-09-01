@@ -146,6 +146,28 @@ func focusBlip() {
     }
 }
 
+// Selecting a CJK input mode can silently not stick (see focusBlip). Logging
+// showed the app reporting "-> Korean" twice in a row because the first select
+// had quietly reverted, which the user feels as a swallowed keypress. So verify
+// afterwards and retry rather than trusting the call.
+func selectAndVerify(_ target: TISInputSource, attempt: Int = 1) {
+    TISSelectInputSource(target)
+    guard isCJKV(target) else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusBlip() }
+    guard attempt <= 3 else {
+        NSLog("local: gave up switching to %@ after %d attempts", sourceID(target), attempt - 1)
+        return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+        let now = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        if sourceID(now) != sourceID(target) {
+            NSLog("local: %@ did not stick (now %@) — retry %d",
+                  sourceID(target), sourceID(now), attempt)
+            selectAndVerify(target, attempt: attempt + 1)
+        }
+    }
+}
+
 func toggleLocalInputSource() {
     guard let targets = toggleTargets() else {
         NSLog("no latin+IME source pair found; nothing to toggle")
@@ -153,12 +175,8 @@ func toggleLocalInputSource() {
     }
     let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
     let target = sourceID(current) == sourceID(targets.latin) ? targets.ime : targets.latin
-    TISSelectInputSource(target)
-    NSLog("local -> %@", sourceID(target))
-    if isCJKV(target) {
-        // Delay so the trigger's key-up still reaches the remote app first.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusBlip() }
-    }
+    NSLog("local: %@ -> %@", sourceID(current), sourceID(target))
+    selectAndVerify(target)
 }
 
 // MARK: - Event tap
