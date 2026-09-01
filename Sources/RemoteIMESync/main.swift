@@ -119,8 +119,13 @@ func isCJKV(_ source: TISInputSource) -> Bool {
 // half-applies — the menu bar changes but the focused app keeps the old
 // source until key focus moves. Same workaround as macism: steal key focus
 // with a tiny window for ~150ms, then hand it back to the previous app.
+// While the blip window holds key focus we are the frontmost app, not the
+// remote desktop — so the frontmost check has to forgive this window.
+var blipUntil = Date.distantPast
+
 func focusBlip() {
     let previous = NSWorkspace.shared.frontmostApplication
+    blipUntil = Date().addingTimeInterval(1.2)   // blip 0.5s + slack for the restore
     let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 3, height: 3),
                      styleMask: [.titled], // plain windows can't become key
                      backing: .buffered, defer: false)
@@ -137,6 +142,7 @@ func focusBlip() {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
         w.close()
         previous?.activate(options: [])
+        blipUntil = Date().addingTimeInterval(0.7)
     }
 }
 
@@ -249,6 +255,7 @@ final class Tap {
 
     func remoteAppFrontmost() -> Bool {
         if anyApp { return true }
+        if Date() < blipUntil { return true }   // our own blip window is up
         guard let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         else { return false }
         return bundlePrefixes.contains { id.hasPrefix($0) }
@@ -266,9 +273,16 @@ final class Tap {
         guard type == .keyDown || type == .keyUp,
               event.getIntegerValueField(.eventSourceUserData) != Tap.ownTag,
               event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
-              event.getIntegerValueField(.keyboardEventKeycode) == trigger.keyCode,
-              remoteAppFrontmost()
+              event.getIntegerValueField(.keyboardEventKeycode) == trigger.keyCode
         else { return Unmanaged.passUnretained(event) }
+
+        guard remoteAppFrontmost() else {
+            if type == .keyDown {
+                NSLog("ignored (frontmost = %@)",
+                      NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?")
+            }
+            return Unmanaged.passUnretained(event)
+        }
 
         let flags = event.flags.intersection(Tap.relevant)
         let isRealign = !trigger.flags.contains(.maskShift)
