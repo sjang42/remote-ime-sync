@@ -11,6 +11,7 @@
 
 import AppKit
 import Carbon
+import IOKit.hid
 
 // MARK: - Config
 
@@ -357,9 +358,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                      keyEquivalent: "q")
         statusItem.menu = menu
 
-        // Without Input Monitoring the tap can't be created. Exiting here would
-        // make a KeepAlive launchd job respawn us in a loop, reopening System
-        // Settings every few seconds — so wait for the grant instead.
+        // Input Monitoring has to be asked for explicitly. A failing
+        // CGEvent.tapCreate alone does not put us in the System Settings list —
+        // only IOHIDRequestAccess registers the app there (verified 2026-09-01).
+        if IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) != kIOHIDAccessTypeGranted {
+            NSLog("requesting Input Monitoring access")
+            IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        }
+
+        // Exiting when denied would make a KeepAlive launchd job respawn us in a
+        // loop, reopening System Settings every few seconds — so wait instead.
         if !waitForTap() {
             statusItem.button?.title = "⇄한⚠️"
             NSLog("no event tap yet — grant Input Monitoring to \(Bundle.main.executablePath ?? "this binary")")
