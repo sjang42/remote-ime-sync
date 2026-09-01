@@ -358,13 +358,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                      keyEquivalent: "q")
         statusItem.menu = menu
 
-        // Input Monitoring has to be asked for explicitly. A failing
-        // CGEvent.tapCreate alone does not put us in the System Settings list —
-        // only IOHIDRequestAccess registers the app there (verified 2026-09-01).
-        if IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) != kIOHIDAccessTypeGranted {
-            NSLog("requesting Input Monitoring access")
-            IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-        }
+        // Two different permissions are in play and the naming is misleading:
+        // a listen-only tap needs Input Monitoring, but a tap that *modifies*
+        // events — which is what we do — is gated on Accessibility. Ask for
+        // both, since neither list shows an app that never requested (a failing
+        // CGEvent.tapCreate alone registers nothing; verified 2026-09-01).
+        requestPermissions()
 
         // Exiting when denied would make a KeepAlive launchd job respawn us in a
         // loop, reopening System Settings every few seconds — so wait instead.
@@ -379,6 +378,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.statusItem.button?.title = "⇄한"
                 }
             }
+        }
+    }
+
+    func requestPermissions() {
+        let hid = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+        let ax = AXIsProcessTrusted()
+        NSLog("permissions — input monitoring: %@, accessibility: %@",
+              hid == kIOHIDAccessTypeGranted ? "granted"
+                : (hid == kIOHIDAccessTypeDenied ? "denied" : "unknown"),
+              ax ? "granted" : "not granted")
+        if hid != kIOHIDAccessTypeGranted {
+            NSLog("requesting Input Monitoring")
+            IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        }
+        if !ax {
+            NSLog("requesting Accessibility")
+            AXIsProcessTrustedWithOptions(
+                [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
         }
     }
 
