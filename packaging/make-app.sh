@@ -25,7 +25,16 @@ cat > "$APP/Contents/Info.plist" <<PL
   <key>LSUIElement</key><true/>
 </dict></plist>
 PL
-codesign --force --sign - --identifier com.jex.remote-ime-sync "$APP"
+# Developer ID 로 서명한다 — ad-hoc 은 빌드마다 cdhash 가 바뀌어 TCC 권한이
+# 매번 초기화된다(입력 모니터링·손쉬운 사용을 새 버전마다 다시 켜야 함).
+SIGN_ID="${SIGN_ID:-Developer ID Application: Sanghyun Jang}"
+if security find-identity -v -p codesigning | grep -q "$SIGN_ID"; then
+    codesign --force --options runtime --timestamp \
+        --sign "$SIGN_ID" --identifier com.jex.remote-ime-sync "$APP"
+else
+    echo "warning: '$SIGN_ID' 없음 — ad-hoc 서명으로 대체 (버전마다 권한 재승인 필요)" >&2
+    codesign --force --sign - --identifier com.jex.remote-ime-sync "$APP"
+fi
 codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature"
 (cd "$OUT" && zip -qry RemoteIMESync.app.zip RemoteIMESync.app)
 echo "→ $OUT/RemoteIMESync.app.zip"
