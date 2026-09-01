@@ -346,15 +346,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   sendStepMs: config.sendStepMs ?? 25,
                   bundlePrefixes: config.bundlePrefixes ?? ["com.p5sys.jump"],
                   anyApp: config.anyApp ?? false)
-        if !tap.start() {
-            fputs("""
-            error: could not create event tap. Grant Input Monitoring \
-            (System Settings > Privacy & Security) and relaunch.
-            """, stderr)
-            NSWorkspace.shared.open(URL(string:
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
-            exit(1)
-        }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "⇄한"
@@ -365,7 +356,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)),
                      keyEquivalent: "q")
         statusItem.menu = menu
+
+        // Without Input Monitoring the tap can't be created. Exiting here would
+        // make a KeepAlive launchd job respawn us in a loop, reopening System
+        // Settings every few seconds — so wait for the grant instead.
+        if !waitForTap() {
+            statusItem.button?.title = "⇄한⚠️"
+            NSLog("no event tap yet — grant Input Monitoring to \(Bundle.main.executablePath ?? "this binary")")
+            NSWorkspace.shared.open(URL(string:
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
+            Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { timer in
+                if self.waitForTap() {
+                    timer.invalidate()
+                    self.statusItem.button?.title = "⇄한"
+                }
+            }
+        }
+    }
+
+    func waitForTap() -> Bool {
+        guard tap.start() else { return false }
         NSLog("running")
+        return true
     }
 }
 
