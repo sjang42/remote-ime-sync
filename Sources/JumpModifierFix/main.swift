@@ -49,11 +49,13 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
         return Unmanaged.passUnretained(event)
     }
 
-    // Fix mode: injected (srcPID != 0) Cmd+Shift+Opt while CJK -> drop Opt.
-    // ponytail: rare legit Cmd+Shift+Opt combos sent while Korean also get
+    // Fix mode: injected (srcPID != 0) Cmd+Opt (Shift or not) while CJK -> drop Opt.
+    // 2026-09-21: the bogus Option also shows up on plain Cmd+<key>. Ctrl combos
+    // are left alone so the host toggle (Ctrl+Opt+Cmd+Space) still works.
+    // ponytail: rare legit Cmd+Opt combos sent while Korean also get
     // stripped; acceptable until the upstream fix lands.
-    if flags.contains(.maskCommand), flags.contains(.maskShift),
-       flags.contains(.maskAlternate), srcPID != 0, currentSourceIsCJKV() {
+    if flags.contains(.maskCommand), flags.contains(.maskAlternate),
+       !flags.contains(.maskControl), srcPID != 0, currentSourceIsCJKV() {
         event.flags = flags.subtracting(.maskAlternate)
         NSLog("stripped bogus Option: keyCode=%d srcPID=%d", keyCode, srcPID)
     }
