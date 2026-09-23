@@ -26,7 +26,7 @@ func currentSourceIsCJKV() -> Bool {
 }
 
 var machPort: CFMachPort?
-var lastOptDown: CGEventTimestamp = 0
+var optDownAfterCmd = false
 
 let callback: CGEventTapCallBack = { _, type, event, _ in
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -51,19 +51,20 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
     }
 
     // Fix mode: strip the bogus Option Jump adds to injected Cmd+<key> while CJK.
-    // Bogus vs real (2026-09-23 observe): the bogus Option's key-down arrives in the
-    // same instant as the key; a human-pressed Option lands tens of ms earlier.
-    // So Option pressed <20ms before the key = bogus. Ctrl combos are left alone
-    // (the host toggle Ctrl+Opt+Cmd+Space is synthesized just as tightly).
+    // Bogus vs real (2026-09-23 observe): Jump defers modifiers while Cmd is held
+    // and flushes them with the key in fixed order Ctrl -> Opt -> Cmd, so a real
+    // Option goes down BEFORE Cmd. The bogus Option is injected after Cmd is
+    // already down. Ctrl combos are left alone (host toggle Ctrl+Opt+Cmd+Space).
+    // ponytail: assumes Jump's flush order; revisit if a real Opt ever arrives after Cmd.
     if type == .flagsChanged {
         if srcPID != 0, keyCode == 58 || keyCode == 61, flags.contains(.maskAlternate) {
-            lastOptDown = event.timestamp
+            optDownAfterCmd = flags.contains(.maskCommand)
         }
         return Unmanaged.passUnretained(event)
     }
     if flags.contains(.maskCommand), flags.contains(.maskAlternate),
        !flags.contains(.maskControl), srcPID != 0,
-       event.timestamp &- lastOptDown < 20_000_000, currentSourceIsCJKV() {
+       optDownAfterCmd, currentSourceIsCJKV() {
         event.flags = flags.subtracting(.maskAlternate)
         NSLog("stripped bogus Option: keyCode=%d srcPID=%d", keyCode, srcPID)
     }
