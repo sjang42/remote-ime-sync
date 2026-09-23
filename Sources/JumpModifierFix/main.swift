@@ -26,6 +26,7 @@ func currentSourceIsCJKV() -> Bool {
 }
 
 var machPort: CFMachPort?
+var lastOptDown: CGEventTimestamp = 0
 
 let callback: CGEventTapCallBack = { _, type, event, _ in
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -49,13 +50,20 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
         return Unmanaged.passUnretained(event)
     }
 
-    // Fix mode: injected (srcPID != 0) Cmd+Opt (Shift or not) while CJK -> drop Opt.
-    // 2026-09-21: the bogus Option also shows up on plain Cmd+<key>. Ctrl combos
-    // are left alone so the host toggle (Ctrl+Opt+Cmd+Space) still works.
-    // ponytail: rare legit Cmd+Opt combos sent while Korean also get
-    // stripped; acceptable until the upstream fix lands.
+    // Fix mode: strip the bogus Option Jump adds to injected Cmd+<key> while CJK.
+    // Bogus vs real (2026-09-23 observe): the bogus Option's key-down arrives in the
+    // same instant as the key; a human-pressed Option lands tens of ms earlier.
+    // So Option pressed <20ms before the key = bogus. Ctrl combos are left alone
+    // (the host toggle Ctrl+Opt+Cmd+Space is synthesized just as tightly).
+    if type == .flagsChanged {
+        if srcPID != 0, keyCode == 58 || keyCode == 61, flags.contains(.maskAlternate) {
+            lastOptDown = event.timestamp
+        }
+        return Unmanaged.passUnretained(event)
+    }
     if flags.contains(.maskCommand), flags.contains(.maskAlternate),
-       !flags.contains(.maskControl), srcPID != 0, currentSourceIsCJKV() {
+       !flags.contains(.maskControl), srcPID != 0,
+       event.timestamp &- lastOptDown < 20_000_000, currentSourceIsCJKV() {
         event.flags = flags.subtracting(.maskAlternate)
         NSLog("stripped bogus Option: keyCode=%d srcPID=%d", keyCode, srcPID)
     }
@@ -64,7 +72,7 @@ let callback: CGEventTapCallBack = { _, type, event, _ in
 
 var mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
     | (1 << CGEventType.keyUp.rawValue)
-if observe { mask |= (1 << CGEventType.flagsChanged.rawValue) }
+mask |= (1 << CGEventType.flagsChanged.rawValue)
 guard let port = CGEvent.tapCreate(
     tap: .cgSessionEventTap,
     place: .headInsertEventTap,
